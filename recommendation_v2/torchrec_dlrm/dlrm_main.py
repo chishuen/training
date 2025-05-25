@@ -743,6 +743,8 @@ def main(argv: List[str]) -> None:
     if args.over_arch_layer_sizes is not None:
         sharded_module_kwargs["over_arch_layer_sizes"] = args.over_arch_layer_sizes
 
+    if is_rank_zero:
+        print("chishuen: creating dlrm model")
     if args.interaction_type == InteractionType.ORIGINAL:
         dlrm_model = DLRM(
             embedding_bag_collection=EmbeddingBagCollection(
@@ -782,6 +784,8 @@ def main(argv: List[str]) -> None:
             "Unknown interaction option set. Should be original, dcn, or projection."
         )
 
+    if is_rank_zero:
+        print("chishuen: call DLRMTrain")
     train_model = DLRMTrain(dlrm_model)
     embedding_optimizer = torch.optim.Adagrad if args.adagrad else torch.optim.SGD
     # This will apply the Adagrad optimizer in the backward pass for the embeddings (sparse_arch). This means that
@@ -794,11 +798,15 @@ def main(argv: List[str]) -> None:
     optimizer_kwargs = {"lr": args.learning_rate}
     if args.adagrad:
         optimizer_kwargs["eps"] = ADAGRAD_EPS
+    if is_rank_zero:
+        print("chishuen: call apply_optimizer_in_backward")
     apply_optimizer_in_backward(
         embedding_optimizer,
         train_model.model.sparse_arch.parameters(),
         optimizer_kwargs,
     )
+    if is_rank_zero:
+        print("chishuen: call EmbeddingShardingPlanner")
     planner = EmbeddingShardingPlanner(
         topology=Topology(
             local_world_size=get_local_size(),
@@ -810,10 +818,14 @@ def main(argv: List[str]) -> None:
         # https://pytorch.org/torchrec/torchrec.distributed.planner.html#torchrec.distributed.planner.storage_reservations.HeuristicalStorageReservation
         storage_reservation=HeuristicalStorageReservation(percentage=0.05),
     )
+    if is_rank_zero:
+        print("chishuen: call collective_plan")
     plan = planner.collective_plan(
         train_model, get_default_sharders(), dist.GroupMember.WORLD
     )
 
+    if is_rank_zero:
+        print("chishuen: call DistributedModelParallel")
     model = DistributedModelParallel(
         module=train_model,
         device=device,
